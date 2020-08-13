@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
             continue;
 
         std::string line_lower = line;
-        std::for_each(line_lower.begin(), line_lower.end(), tolower);
+        std::transform(line_lower.begin(), line_lower.end(), line_lower.begin(), tolower);
 
         // don't check files more than once
         if (seen_files.find(line_lower) != seen_files.end())
@@ -149,7 +149,7 @@ std::vector<std::string> get_pak_file_list(std::filesystem::path pak_path) {
         pak_in.read(reinterpret_cast<char*>(&pak_file), sizeof(pak_file_t));
 
         std::string lower = pak_file.name;
-        std::for_each(lower.begin(), lower.end(), tolower);
+        std::transform(lower.begin(), lower.end(), lower.begin(), tolower);
         file_list.emplace_back(lower);
     }
 
