@@ -1,157 +1,201 @@
-#include <iostream>
+#include <print>
 #include <filesystem>
-#include <unordered_map>
+
 #include <map>
-#include <unordered_set>
 #include <fstream>
-#include "pak.h"
+#include <iostream>
 
-/* this function returns file names in lower case. react accordingly */
-std::vector<std::string> get_pak_file_list(std::filesystem::path pak_path);
+#include "fs/pak.h"
 
-typedef std::unordered_map<std::string, std::vector<std::string> > files_per_pak_t;
-typedef std::map<std::string, std::filesystem::path> file_locations_t;
+#include <boost/program_options.hpp>
 
-void read_paks(std::filesystem::path pakdir, files_per_pak_t &files_per_pak, file_locations_t &file_locations) {
-    for (auto &pak_path: std::filesystem::directory_iterator(pakdir)) {
-        if (pak_path.path().extension() != ".pak")
-            continue;
+#include "fs/q2fs.h"
 
-        try {
-            auto list = get_pak_file_list(pak_path);
-            files_per_pak[pak_path.path().string()] = list;
-            for (auto &p: list) {
-                file_locations[p] = pak_path;
-            }
-        } catch (not_a_pak &e) {
-            std::cerr << "warn: " << pak_path.path().string() << " is not a pak file.\n";
-        }
-    }
-}
+#include <boost/algorithm/string.hpp>
 
-int main(int argc, char* argv[]) {
-    std::filesystem::path q2dir, moddir;
+// second arg: function to transform the line
+filelist_t make_filelist(std::istream &src, const std::optional<std::function<std::string(const std::string&)>> &transform = std::nullopt) {
+    filelist_t filelist;
 
-    std::cerr << "q2_chextex by zardoru (wyrmin.xyz)\n";
+    for (std::string line; std::getline(src, line);) {
+        boost::trim(line);
+        boost::to_lower(line);
 
-    if (argc == 2) { // q2 path
-        q2dir = argv[1];
-    } else if (argc >= 3) { // q2 path and mod path
-        q2dir = argv[1];
-        moddir = q2dir / argv[2];
-    } else { // invalid usage
-        std::cerr << "usage: q2_chextex q2dir moddir < file_list.txt\n";
-        std::cerr << "file_list.txt must contain one filename per line.\n";
-        return 1;
-    }
-
-    bool q2dir_valid = std::filesystem::is_directory(q2dir);
-    if (!q2dir_valid) {
-        std::cerr << "error: the q2 path indicated is not a directory. or wasn't found...\n";
-        return 1;
-    }
-
-    if (!moddir.empty()) {
-        if (!std::filesystem::is_directory(moddir)) {
-            std::cerr << "error: the mod path indicated is not a directory. or wasn't found...\n";
-        }
-    }
-
-
-    std::cerr << "reading pak files...\n";
-    files_per_pak_t files_per_pak;
-    file_locations_t file_locations;
-
-    std::filesystem::path baseq2dir = q2dir / "baseq2";
-
-    if (!std::filesystem::exists(baseq2dir)) {
-        std::cerr << "baseq2 not found in the quake2 dir... aborting.\n";
-        return 1;
-    }
-
-    // read pak files from q2 dir
-    read_paks(baseq2dir, files_per_pak, file_locations);
-
-    // read from mod dir
-    if (!moddir.empty()) {
-        read_paks(moddir, files_per_pak, file_locations);
-    }
-
-    std::cerr << "read " << file_locations.size() << " files from " << files_per_pak.size() << " pak files\n";
-
-    std::unordered_set<std::string> seen_files;
-
-    // now start checking those texture files
-    for (std::string line; std::getline(std::cin, line); ) {
         // skip entdump output
         if (line.find("opening ") == 0) {
             continue;
         }
 
         // empty lines skip them
-        if (line.length() == 0)
+        if (line.empty())
             continue;
 
-        std::string line_lower = line;
-        std::transform(line_lower.begin(), line_lower.end(), line_lower.begin(), tolower);
+        if (transform.has_value()) {
+            line = transform.value()(line);
+        }
 
-        // don't check files more than once
-        if (seen_files.find(line_lower) != seen_files.end())
-            continue;
+        filelist.insert(line);
+    }
 
-        seen_files.emplace(line_lower);
+    return filelist;
+}
 
-        // go and find it, champ
-        // not case sensitive here
-        auto it = file_locations.find(line_lower);
-        if (it != file_locations.end()) {
-            std::cout << line << "@" << it->second.string() << std::endl;
-        } else {
-            // try modpath first. case sensitive depending on OS, so we don't use lower-case version.
-            if (!moddir.empty()) {
-                std::filesystem::path filepath = moddir / line;
-                if (std::filesystem::exists(filepath)) {
-                    std::cout << line << "@" << filepath.string() << std::endl;
-                    continue;
-                }
-            }
+int main(int argc, char *argv[]) {
+    std::filesystem::path q2dir, mod_dir;
+    std::vector<std::filesystem::path> map_lists;
+    std::optional<std::filesystem::path> out_pak_name;
+    std::optional<std::filesystem::path> out_res_name;
 
-            // not found. try baseq2
-            std::filesystem::path filepath = baseq2dir / line;
-            if (std::filesystem::exists(filepath)) {
-                std::cout << line << "@" << filepath.string() << std::endl;
-            } else {
-                std::cout << line << "@" << "NOT FOUND" << std::endl;
-            }
+    std::println(stderr, "q2_chextex by zardoru (wyrmin.xyz)");
+    std::println(stderr, "a tool to verify file integrity and packaging for quake 2 mods");
+
+    auto po = boost::program_options::options_description("options");
+    po.add_options()
+            ("help,h", "show this help message and exit")
+            ("version,v", "show version information and exit")
+            ("q2dir,q2", boost::program_options::value<std::filesystem::path>(), "path to q2 directory")
+            ("moddir,mod", boost::program_options::value<std::filesystem::path>(), "path to mod directory")
+            ("file-list,l", boost::program_options::value<std::filesystem::path>(),
+             "path to file list text file to verify (newline separated)")
+            ("map-lists,m", boost::program_options::value<std::vector<std::filesystem::path>>()->multitoken(),
+                "paths to map lists to verify (newline separated), no maps/ prefix")
+            ("out-pak,pak", boost::program_options::value<std::filesystem::path>(),
+             "path to output pak file with loose files")
+            ("out-resolutions,map", boost::program_options::value<std::filesystem::path>(), "path to output resolved file list")
+    ;
+
+
+    boost::program_options::variables_map vm;
+    try {
+        boost::program_options::store(boost::program_options::parse_command_line(argc, argv, po), vm);
+        boost::program_options::notify(vm);
+    } catch (boost::program_options::error &e) {
+        std::println(stderr, "error: {}", e.what());
+        return 1;
+    }
+
+    if (vm.contains("help")) {
+        std::cerr << po << "\n";
+        return 0;
+    }
+
+    if (vm.contains("version")) {
+        std::println(stderr, "q2_chextex version 1.0");
+        return 0;
+    }
+
+    std::optional<std::ifstream> filelist_file;
+    if (vm.contains("file-list")) {
+        filelist_file = std::ifstream(vm["file-list"].as<std::filesystem::path>());
+        if (!filelist_file.value().is_open()) {
+            std::println(stderr, "error: file list file not found or could not be opened.");
+            return 1;
         }
     }
 
-    return 0;
-}
-
-std::vector<std::string> get_pak_file_list(std::filesystem::path pak_path) {
-    std::ifstream pak_in(pak_path, std::ios::in | std::ios::binary);
-    pak_header_t header = {0};
-    pak_in.read(reinterpret_cast<char*>(&header), sizeof (pak_header_t));
-
-    if (memcmp(header.id, "PACK", 4) != 0)
-        throw not_a_pak();
-
-    pak_in.seekg(header.offset, std::ios::beg);
-
-    size_t entry_count = header.size / sizeof(pak_file_t);
-    std::vector<std::string> file_list;
-    pak_file_t pak_file = {0};
-
-    file_list.reserve(entry_count);
-
-    for (int i = 0; i < entry_count; i++) {
-        pak_in.read(reinterpret_cast<char*>(&pak_file), sizeof(pak_file_t));
-
-        std::string lower = pak_file.name;
-        std::transform(lower.begin(), lower.end(), lower.begin(), tolower);
-        file_list.emplace_back(lower);
+    if (vm.contains("q2dir")) {
+        q2dir = vm["q2dir"].as<std::filesystem::path>();
+        if (vm.contains("moddir")) {
+            mod_dir = vm["moddir"].as<std::filesystem::path>();
+        }
+    } else {
+        std::println(stderr, "error: q2dir not specified.");
+        return 1;
     }
 
-    return file_list;
+    bool q2dir_valid = std::filesystem::is_directory(q2dir);
+    if (!q2dir_valid) {
+        std::println(stderr, "error: the q2 path indicated is not a directory. or wasn't found...");
+        return 1;
+    }
+
+    if (!mod_dir.empty()) {
+        if (!std::filesystem::is_directory(q2dir / mod_dir)) {
+            std::println(stderr, "error: the mod path indicated is not a directory. or wasn't found...");
+            return 1;
+        }
+    }
+
+    if (vm.contains("map-lists")) {
+        map_lists.append_range(vm["map-lists"].as<std::vector<std::filesystem::path>>());
+    }
+
+    if (vm.contains("out-pak")) {
+        out_pak_name = vm["out-pak"].as<std::filesystem::path>();
+    }
+
+    if (vm.contains("out-resolutions")) {
+        out_res_name = vm["out-resolutions"].as<std::filesystem::path>();
+    }
+
+    try {
+        q2fs_t fs;
+        filelist_t filelist;
+
+        fs.set_paths(q2dir, mod_dir);
+
+        //
+        if (!map_lists.empty()) {
+            for (const auto &map_list: map_lists) {
+                if (!std::filesystem::exists(map_list) || !std::filesystem::is_regular_file(map_list)) {
+                    std::println(stderr, "error: map list file {} does not exist or is not a regular file.",
+                                 map_list.string());
+                    continue;
+                }
+
+                std::ifstream map_list_in(map_list, std::ios::in);
+                if (!map_list_in.is_open()) {
+                    std::println(stderr, "error: map list file {} not found or could not be opened.",
+                                 map_list.string());
+                    continue;
+                }
+                auto _maps = make_filelist(map_list_in, [](auto f) {
+                    return std::format("maps/{}{}", f, !f.ends_with(".bsp") ? ".bsp" : "");
+                });
+
+                filelist.insert_range(_maps);
+            }
+        }
+
+        if (filelist_file.has_value()) {
+            auto input_resolve_requests = make_filelist(filelist_file.value());
+            filelist.insert_range(input_resolve_requests);
+        }
+
+        auto mappings = fs.resolve_mappings(filelist);
+        if (!mappings) {
+            std::println(stderr, "error: {}", mappings.error().what());
+            return 1;
+        }
+
+        if (out_res_name.has_value()) {
+            std::ofstream out(out_res_name.value(), std::ios::out);
+
+            if (!out.is_open()) {
+                std::println(stderr, "error: could not open output file {}", out_res_name.value().string());
+                return 1;
+            }
+
+            out << mappings->serialized(fs.file_referencers);
+        }
+
+
+        if (out_pak_name.has_value() && !mappings->loose_file_locations.empty()) {
+            auto pak = pak_t::make_pak(mappings->loose_file_locations);
+            std::ofstream out(out_pak_name.value(), std::ios::out | std::ios::binary);
+
+            if (!out.is_open()) {
+                std::println(stderr, "error: could not open output pak file {}", out_pak_name.value().string());
+                return 1;
+            }
+
+            pak.write(mappings->loose_file_locations, out);
+        }
+    } catch (std::exception &e) {
+        // std::expected doesn't cover _all_ the bases
+        std::println(stderr, "error: {}", e.what());
+        return 1;
+    }
+
+    return 0;
 }
