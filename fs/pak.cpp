@@ -1,7 +1,9 @@
 #include "pak.h"
 
+#include <cstring>
 #include <format>
 #include <fstream>
+#include <iostream>
 
 pak_header_t::pak_header_t() {
     memcpy(id, "PACK", 4);
@@ -90,6 +92,9 @@ pak_t pak_t::make_pak(const file_locations_t &files) {
     pak_t pak;
 
     auto offs = sizeof(pak_header_t) + sizeof(pak_file_t) * files.size();
+    pak.header.offset = sizeof(pak_header_t);
+    pak.header.size = files.size() * sizeof(pak_file_t);
+
     for (const auto &[fs_name, phys_path]: files) {
         pak_file_t pak_file;
 
@@ -104,8 +109,6 @@ pak_t pak_t::make_pak(const file_locations_t &files) {
         pak.files.push_back(pak_file);
     }
 
-    pak.header.size = offs;
-
     return pak;
 }
 
@@ -115,6 +118,7 @@ void pak_t::write(const file_locations_t& map, std::ostream &out) const {
 
     for (const auto &file: files) {
         if (auto it = map.find(file); it == map.end()) {
+            std::println(std::cerr, "warn: file {} not found in map", file.name);
             continue;
         }
 

@@ -19,16 +19,17 @@ bool q2fs_t::resolve_file(fs_mappings_t &final_locations, std::string filename) 
         //
         // try modpath first. case sensitive depending on OS, so we don't use lower-case version.
         if (!moddir.empty()) {
-            std::filesystem::path filepath = moddir / filename;
-            if (std::filesystem::exists(filepath)) {
-                final_locations.loose_file_locations[filename] = filepath;
+            if (loose_file_locations_mod.contains(filename) && std::filesystem::exists(
+                    loose_file_locations_mod[filename])) {
+                final_locations.loose_file_locations[filename] = loose_file_locations_mod[filename];
                 return true;
             }
         }
 
         // not found. try baseq2
-        if (std::filesystem::path filepath = baseq2dir / filename; std::filesystem::exists(filepath)) {
-            final_locations.loose_file_locations[filename] = filepath;
+        if (loose_file_locations_base.contains(filename) &&
+            std::filesystem::exists(loose_file_locations_base[filename])) {
+            final_locations.loose_file_locations[filename] = loose_file_locations_base[filename];
             return true;
         }
 
@@ -87,6 +88,10 @@ std::expected<fs_mappings_t, resolution_error> q2fs_t::resolve_mappings(const st
     for (const auto &map: map_files) {
         auto mapfile = final_locations.loose_file_locations.find(map);
         if (mapfile == final_locations.loose_file_locations.end()) {
+            if (final_locations.pak_file_locations.contains(map)) {
+                continue;
+            }
+
             return std::unexpected(std::format("bsp file {} not found", map.string()));
         }
 
@@ -120,6 +125,7 @@ std::expected<fs_mappings_t, resolution_error> q2fs_t::resolve_mappings(const st
 
         for (const auto &texture: *tex_path) {
             textures.insert(texture);
+            file_referencers[texture].insert(mapfile->second.string());
         }
     }
 
@@ -147,6 +153,25 @@ void q2fs_t::read_paks(const std::filesystem::path &pakdir) {
     }
 }
 
+file_locations_t q2fs_t::read_loose(std::filesystem::path path) {
+    file_locations_t locs;
+    for (auto &file: std::filesystem::recursive_directory_iterator(path)) {
+        if (file.path().extension() == ".pak")
+            continue;
+
+        if (file.is_directory())
+            continue;
+
+        auto fpath = relative(file, path);
+        std::string path = fpath.string();
+        std::ranges::transform(path, path.begin(), tolower);
+
+        locs[path] = file.path();
+    }
+
+    return locs;
+}
+
 void q2fs_t::set_paths(const std::filesystem::path &q2dir, const std::filesystem::path &moddir) {
     this->moddir = moddir;
 
@@ -160,6 +185,7 @@ void q2fs_t::set_paths(const std::filesystem::path &q2dir, const std::filesystem
     }
 
     read_paks(baseq2dir);
+    loose_file_locations_base = read_loose(baseq2dir);
 
     if (!moddir.empty()) {
         auto final_mod_dir = q2dir / moddir;
@@ -170,6 +196,7 @@ void q2fs_t::set_paths(const std::filesystem::path &q2dir, const std::filesystem
         }
 
         read_paks(q2dir / moddir);
+        loose_file_locations_mod = read_loose(q2dir / moddir);
     }
 }
 
@@ -189,15 +216,40 @@ boost::json::array serialize_filelist(const filelist_t &locset) {
     return locset_json;
 }
 
-std::string fs_mappings_t::serialized() const {
+std::optional<boost::json::object> serialize_referencers(const filelist_t &files,
+                                                         const std::optional<const file_referencers_t> &referencers) {
+    if (!referencers.has_value())
+        return std::nullopt;
+
+    boost::json::object referencers_json;
+    for (const auto &file: files) {
+        if (!referencers->contains(file)) {
+            std::println(stderr, "warn: file {} not found in referencers", file.string());
+            continue;
+        }
+
+        auto list = referencers->at(file);
+        referencers_json[file.string()] = serialize_filelist(list);
+    }
+    return referencers_json;
+}
+
+std::string fs_mappings_t::serialized(const std::optional<const file_referencers_t> &referencers) const {
     // output the mappings with boost::json
     boost::json::object pak_mappings = serialize_file_locset(pak_file_locations);
     boost::json::object loose_mappings = serialize_file_locset(loose_file_locations);
     boost::json::array missing_mappings = serialize_filelist(missing_files);
+    auto missing_referencers = serialize_referencers(missing_files, referencers);
 
-    return boost::json::serialize(boost::json::object{
+    boost::json::object obj{
         {"pak_files", pak_mappings},
         {"loose_files", loose_mappings},
-        {"missing_files", missing_mappings}
-    });
+        {"missing_files", missing_mappings},
+    };
+
+    if (missing_referencers.has_value()) {
+        obj["missing_referencers"] = missing_referencers.value();
+    }
+
+    return boost::json::serialize(obj);
 }

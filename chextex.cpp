@@ -13,7 +13,8 @@
 
 #include <boost/algorithm/string.hpp>
 
-filelist_t make_filelist(std::istream &src) {
+// second arg: function to transform the line
+filelist_t make_filelist(std::istream &src, const std::optional<std::function<std::string(const std::string&)>> &transform = std::nullopt) {
     filelist_t filelist;
 
     for (std::string line; std::getline(src, line);) {
@@ -28,6 +29,10 @@ filelist_t make_filelist(std::istream &src) {
         // empty lines skip them
         if (line.empty())
             continue;
+
+        if (transform.has_value()) {
+            line = transform.value()(line);
+        }
 
         filelist.insert(line);
     }
@@ -54,9 +59,9 @@ int main(int argc, char *argv[]) {
              "path to file list text file to verify (newline separated)")
             ("map-lists,m", boost::program_options::value<std::vector<std::filesystem::path>>()->multitoken(),
                 "paths to map lists to verify (newline separated), no maps/ prefix")
-            ("out-pak", boost::program_options::value<std::filesystem::path>(),
+            ("out-pak,pak", boost::program_options::value<std::filesystem::path>(),
              "path to output pak file with loose files")
-            ("out-resolutions", boost::program_options::value<std::filesystem::path>(), "path to output resolved file list")
+            ("out-resolutions,map", boost::program_options::value<std::filesystem::path>(), "path to output resolved file list")
     ;
 
 
@@ -105,7 +110,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (!mod_dir.empty()) {
-        if (!std::filesystem::is_directory(mod_dir)) {
+        if (!std::filesystem::is_directory(q2dir / mod_dir)) {
             std::println(stderr, "error: the mod path indicated is not a directory. or wasn't found...");
             return 1;
         }
@@ -132,13 +137,21 @@ int main(int argc, char *argv[]) {
         //
         if (!map_lists.empty()) {
             for (const auto &map_list: map_lists) {
+                if (!std::filesystem::exists(map_list) || !std::filesystem::is_regular_file(map_list)) {
+                    std::println(stderr, "error: map list file {} does not exist or is not a regular file.",
+                                 map_list.string());
+                    continue;
+                }
+
                 std::ifstream map_list_in(map_list, std::ios::in);
                 if (!map_list_in.is_open()) {
                     std::println(stderr, "error: map list file {} not found or could not be opened.",
                                  map_list.string());
-                    return 1;
+                    continue;
                 }
-                auto _maps = make_filelist(map_list_in);
+                auto _maps = make_filelist(map_list_in, [](auto f) {
+                    return std::format("maps/{}{}", f, !f.ends_with(".bsp") ? ".bsp" : "");
+                });
 
                 filelist.insert_range(_maps);
             }
@@ -163,7 +176,7 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
-            out << mappings->serialized();
+            out << mappings->serialized(fs.file_referencers);
         }
 
 

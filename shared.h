@@ -5,6 +5,7 @@
 #include <map>
 #include <unordered_set>
 #include <fstream>
+#include <unordered_map>
 
 typedef std::unordered_set<std::filesystem::path> filelist_t;
 
@@ -19,6 +20,6 @@ struct fs_mappings_t {
     // missing
     filelist_t missing_files;
 
-    std::string serialized() const;
+    std::string serialized(const std::optional<const std::unordered_map<std::filesystem::path, filelist_t>> &referencers) const;
 };
 

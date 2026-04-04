@@ -11,6 +11,7 @@
 #include <vector>
 #include <unordered_map>
 #include "pak.h"
+#include "../shared.h"
 
 struct pak_t;
 
@@ -22,16 +23,24 @@ public:
     resolution_error(const std::string& message) : std::runtime_error(message) {}
 };
 
+typedef std::unordered_map<std::filesystem::path, filelist_t> file_referencers_t;
+
 struct q2fs_t {
     std::filesystem::path moddir;
 
     files_per_pak_t files_per_pak;
     file_locations_t pak_file_locations;
+    file_locations_t loose_file_locations_mod;
+    file_locations_t loose_file_locations_base;
+
+    file_referencers_t file_referencers;
 
     std::vector<pak_t> pak_files;
     std::filesystem::path baseq2dir;
 
     void read_paks(const std::filesystem::path &pakdir);
+
+    static file_locations_t read_loose(std::filesystem::path path);
 
     void set_paths(const std::filesystem::path &q2dir, const std::filesystem::path &moddir);
 

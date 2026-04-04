@@ -3,6 +3,7 @@
 #include <vector>
 #include "bsp.h"
 
+#include <cstring>
 #include <istream>
 #include <unordered_set>
 
@@ -119,9 +120,10 @@ std::expected<std::vector<mapsurface_t>, bsp_error> bsp_t::get_surfaces() const 
         seen.insert(texture_name);
 
         mapsurface_t surf;
-        memcpy(surf.c.name, in->texture, sizeof(surf.c.name));
+        memcpy(surf.c.name, in->texture, sizeof surf.c.name);
         surf.c.flags = in->flags;
         surf.c.value = in->value;
+        memcpy(surf.rname, in->texture, sizeof surf.rname);
 
         map_surfaces.emplace_back(surf);
     }
