@@ -3,6 +3,9 @@
 
 #include <cstdint>
 #include <expected>
+#include <variant>
+
+#include "../parse.h"
 
 class bsp_error;
 
@@ -98,11 +101,13 @@ struct bsp_t {
 
     static std::expected<bsp_t, bsp_error> load(std::istream &bsp_path);
 
-    std::expected<std::string, bsp_error> get_entity_string();
+    std::expected<std::string, bsp_error> get_entity_string() const;
 
     std::expected<std::vector<mapsurface_t>, bsp_error> get_surfaces() const;
 
     std::expected<std::vector<std::string>, bsp_error> get_textures() const;
+
+    std::expected<edict_list_t, std::variant<bsp_error, parse_error> > get_edicts() const;
 };
 
 class bsp_error : public std::runtime_error {

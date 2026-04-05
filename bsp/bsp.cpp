@@ -57,7 +57,7 @@ std::expected<bsp_t, bsp_error> bsp_t::load(std::istream &in) {
 }
 
 // az: cppified from entdump
-std::expected<std::string, bsp_error> bsp_t::get_entity_string() {
+std::expected<std::string, bsp_error> bsp_t::get_entity_string() const{
     auto lump = header.lumps[LUMP_ENTITIES];
 
     if (lump.length > MAX_MAP_ENTSTRING) {
@@ -71,7 +71,7 @@ std::expected<std::string, bsp_error> bsp_t::get_entity_string() {
                   lump.fileofs, lump.length, buf.size())));
     }
 
-    auto ptr = reinterpret_cast<char *>(&buf[0]) + lump.fileofs;
+    auto ptr = reinterpret_cast<const char *>(&buf[0]) + lump.fileofs;
     std::string ent_string(ptr, lump.length);
 
     // remove newline at end of lump string if present.
@@ -142,4 +142,19 @@ std::expected<std::vector<std::string>, bsp_error> bsp_t::get_textures() const {
         textures.push_back(surf.texpath());
     }
     return textures;
+}
+
+std::expected<edict_list_t, std::variant<bsp_error, parse_error> > bsp_t::get_edicts() const {
+    q2parser_t parser;
+    auto edict_input = get_entity_string();
+    if (!edict_input.has_value()) {
+        return std::unexpected(edict_input.error());
+    }
+
+    auto result = parser.parse_edicts(*edict_input);
+    if (!result.has_value()) {
+        return std::unexpected(result.error());
+    }
+
+    return result;
 }

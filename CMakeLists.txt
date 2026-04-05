@@ -11,5 +11,6 @@ add_executable(q2_chextex
         fs/pak.cpp
         fs/q2fs.h
         fs/q2fs.cpp
-        shared.h)
+        shared.h
+        parse.cpp)
 target_link_libraries(q2_chextex PRIVATE Boost::headers Boost::program_options)
