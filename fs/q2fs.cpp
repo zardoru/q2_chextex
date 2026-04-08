@@ -85,6 +85,7 @@ std::expected<fs_mappings_t, resolution_error> q2fs_t::resolve_mappings(const st
 
     // get all textures (and maybe sounds) from map
     filelist_t textures;
+    filelist_t sounds;
     for (const auto &map: map_files) {
         auto mapfile = final_locations.loose_file_locations.find(map);
         if (mapfile == final_locations.loose_file_locations.end()) {
@@ -127,10 +128,26 @@ std::expected<fs_mappings_t, resolution_error> q2fs_t::resolve_mappings(const st
             textures.insert(texture);
             file_referencers[texture].insert(mapfile->second.string());
         }
+
+        auto edicts = bsp->get_edicts();
+        if (edicts) {
+            for (const auto &ent: *edicts) {
+                if (ent.contains("noise")) {
+                    auto noise = boost::to_lower_copy(ent.at("noise"));
+                    if (noise.starts_with("/"))
+                        noise = noise.substr(1);
+
+                    noise = std::format("sound/{}{}", noise, !noise.ends_with(".wav") ? ".wav" : "");
+                    sounds.insert(noise);
+                    file_referencers[noise].insert(mapfile->second.string());
+                }
+            }
+        }
     }
 
     // resolve all map references
     resolve_list(final_locations, textures, seen_files);
+    resolve_list(final_locations, sounds, seen_files);
 
     return final_locations;
 }
